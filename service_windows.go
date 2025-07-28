@@ -6,7 +6,6 @@ package service
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"strconv"
@@ -215,7 +214,7 @@ loop:
 				return true, 2
 			}
 			break loop
-		case svc.Pwr:
+		case svc.PowerEvent:
 			ws.i.OnPowerEvent(c.EventType)
 			continue
 		default:
