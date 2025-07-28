@@ -373,6 +373,8 @@ type Interface interface {
 	// It should not take more then a few seconds to execute.
 	// Stop should not call os.Exit directly in the function.
 	Stop(s Service) error
+
+	OnPowerEvent(eventType uint32)
 }
 
 // Shutdowner represents a service interface for a program that differentiates between "stop" and

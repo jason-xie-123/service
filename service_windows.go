@@ -6,6 +6,7 @@ package service
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"strconv"
@@ -179,7 +180,7 @@ func (ws *windowsService) getError() error {
 }
 
 func (ws *windowsService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
-	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
+	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPowerEvent
 	changes <- svc.Status{State: svc.StartPending}
 
 	if err := ws.i.Start(ws); err != nil {
@@ -214,6 +215,9 @@ loop:
 				return true, 2
 			}
 			break loop
+		case svc.Pwr:
+			ws.i.OnPowerEvent(c.EventType)
+			continue
 		default:
 			continue loop
 		}
