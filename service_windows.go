@@ -178,6 +178,28 @@ func (ws *windowsService) getError() error {
 	return ws.stopStartErr
 }
 
+var (
+	tmpLogMutex sync.Mutex
+)
+
+func WriteTempLog(context string) {
+	tmpLogMutex.Lock()
+	defer tmpLogMutex.Unlock()
+
+	file, err := os.OpenFile("C:\\ProgramData\\LetsVPN-Stage\\service-log-tmp.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+
+	timestamp := time.Now().Format("2006-01-02 15:04:05.000") // 带毫秒
+	_, err = fmt.Fprintf(file, "[%s] %s\n", timestamp, context)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("[%s] %s\n", timestamp, context)
+}
+
 func (ws *windowsService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
 	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPowerEvent
 	changes <- svc.Status{State: svc.StartPending}
@@ -187,38 +209,54 @@ func (ws *windowsService) Execute(args []string, r <-chan svc.ChangeRequest, cha
 		return true, 1
 	}
 
+	WriteTempLog("Execute")
+	defer WriteTempLog("Execute End")
+
+	// Modern Standby (S0) 通知通道
+	powerChan := make(chan PowerEventType, 5)
+	go runHiddenWindowLoop(powerChan)
+
+	WriteTempLog("Execute 01")
+
 	changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
+
+	WriteTempLog("Execute 02")
 loop:
 	for {
-		c := <-r
-		switch c.Cmd {
-		case svc.Interrogate:
-			changes <- c.CurrentStatus
-		case svc.Stop:
-			changes <- svc.Status{State: svc.StopPending}
-			if err := ws.i.Stop(ws); err != nil {
-				ws.setError(err)
-				return true, 2
+		select {
+		case c := <-r:
+			switch c.Cmd {
+			case svc.Interrogate:
+				changes <- c.CurrentStatus
+			case svc.Stop:
+				changes <- svc.Status{State: svc.StopPending}
+				if err := ws.i.Stop(ws); err != nil {
+					ws.setError(err)
+					return true, 2
+				}
+				break loop
+			case svc.Shutdown:
+				changes <- svc.Status{State: svc.StopPending}
+				var err error
+				if wsShutdown, ok := ws.i.(Shutdowner); ok {
+					err = wsShutdown.Shutdown(ws)
+				} else {
+					err = ws.i.Stop(ws)
+				}
+				if err != nil {
+					ws.setError(err)
+					return true, 2
+				}
+				break loop
+			case svc.PowerEvent:
+				WriteTempLog("case svc.PowerEvent")
+				ws.i.OnPowerEvent(c.EventType)
+				continue
+			default:
+				continue loop
 			}
-			break loop
-		case svc.Shutdown:
-			changes <- svc.Status{State: svc.StopPending}
-			var err error
-			if wsShutdown, ok := ws.i.(Shutdowner); ok {
-				err = wsShutdown.Shutdown(ws)
-			} else {
-				err = ws.i.Stop(ws)
-			}
-			if err != nil {
-				ws.setError(err)
-				return true, 2
-			}
-			break loop
-		case svc.PowerEvent:
-			ws.i.OnPowerEvent(c.EventType)
-			continue
-		default:
-			continue loop
+		case pe := <-powerChan:
+			WriteTempLog(fmt.Sprintf("Power Event(Execute): SleepState=%d, Event=%d, Source=%d", pe.SleepState, pe.Event, pe.Source))
 		}
 	}
 
@@ -391,6 +429,8 @@ func (ws *windowsService) Run() error {
 			return runErr
 		}
 		return nil
+	} else {
+		go runCLI()
 	}
 	err := ws.i.Start(ws)
 	if err != nil {
